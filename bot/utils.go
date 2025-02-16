@@ -1,223 +1,110 @@
-package bot
-
-import (
-	"errors"
-	"fmt"
-	"time"
-
-	"github.com/celestix/gotgproto/dispatcher"
-	"github.com/celestix/gotgproto/ext"
-	"github.com/gotd/td/telegram/message/entity"
-	"github.com/gotd/td/telegram/message/styling"
-	"github.com/gotd/td/tg"
-	"github.com/krau/SaveAny-Bot/common"
-	"github.com/krau/SaveAny-Bot/logger"
-	"github.com/krau/SaveAny-Bot/queue"
-	"github.com/krau/SaveAny-Bot/storage"
-	"github.com/krau/SaveAny-Bot/types"
-)
-
-var (
-	ErrEmptyDocument   = errors.New("document is empty")
-	ErrEmptyPhoto      = errors.New("photo is empty")
-	ErrEmptyPhotoSize  = errors.New("photo size is empty")
-	ErrEmptyPhotoSizes = errors.New("photo size slice is empty")
-)
-
-func supportedMediaFilter(m *tg.Message) (bool, error) {
-	if not := m.Media == nil; not {
-		return false, dispatcher.EndGroups
-	}
-	switch m.Media.(type) {
-	case *tg.MessageMediaDocument:
-		return true, nil
-	case *tg.MessageMediaPhoto:
-		return true, nil
-	default:
-		return false, nil
-	}
+ile(&types.ReceivedFile{
+Processing: false,
+FileName: file.FileName,
+ChatID: update.EffectiveChat().GetID(),
+MessageID: update.EffectiveMessage.ID,
+ReplyMessageID: msg.ID,
+ReplyChatID: update.GetUserChat().GetID(),
+}); err != nil {
+logger.L.Errorf("Failed to add received file: %s", err)
+if _, err := ctx.EditMessage(update.EffectiveChat().GetID(), &tg.MessagesEditMessageRequest{
+Message: fmt.Sprintf("Failed to add received file: %s", err),
+ID: msg.ID,
+}); err != nil {
+logger.L.Errorf("Failed to edit message: %s", err)
+}
+return dispatcher.EndGroups
 }
 
-var StorageDisplayNames = map[string]string{
-	"all":    "全部",
-	"local":  "服务器磁盘",
-	"alist":  "Alist",
-	"webdav": "WebDAV",
+if !user.Silent {
+return ProvideSelectMessage(ctx, update, file, int(update.EffectiveChat().GetID()), update.EffectiveMessage.ID, msg.ID)
+}
+return HandleSilentAddTask(ctx, update, user, &types.Task{
+Ctx: ctx,
+Status: types.Pending,
+File: file,
+Storage: types.StorageType(user.DefaultStorage),
+FileChatID: update.EffectiveChat().GetID(),
+ReplyMessageID: msg.ID,
+ReplyChatID: update.GetUserChat().GetID(),
+FileMessageID: update.EffectiveMessage.ID,
+})
 }
 
-func getAddTaskMarkup(chatID, messageID int) *tg.ReplyInlineMarkup {
-	storageButtons := make([]tg.KeyboardButtonClass, 0)
-	for _, name := range storage.StorageKeys {
-		storageButtons = append(storageButtons, &tg.KeyboardButtonCallback{
-			Text: StorageDisplayNames[string(name)],
-			Data: []byte(fmt.Sprintf("add %d %d %s", chatID, messageID, name)),
-		})
-	}
-
-	if len(storageButtons) < 1 {
-		return nil
-	}
-	if len(storageButtons) == 1 {
-		return &tg.ReplyInlineMarkup{
-			Rows: []tg.KeyboardButtonRow{
-				{
-					Buttons: storageButtons,
-				},
-			},
-		}
-	}
-	return &tg.ReplyInlineMarkup{
-		Rows: []tg.KeyboardButtonRow{
-			{
-				Buttons: storageButtons,
-			},
-			{
-				Buttons: []tg.KeyboardButtonClass{
-					&tg.KeyboardButtonCallback{
-						Text: "全部",
-						Data: []byte(fmt.Sprintf("add %d %d all", chatID, messageID)),
-					},
-				},
-			},
-		},
-	}
+func AddToQueue(ctx *ext.Context, update *ext.Update) error {
+if !slice.Contain(config.Cfg.Telegram.Admins, update.CallbackQuery.UserID) {
+ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{
+QueryID: update.CallbackQuery.QueryID,
+Alert: true,
+Message: "You do not have permission",
+CacheTime: 5,
+})
+return dispatcher.EndGroups
+}
+args := strings.Split(string(update.CallbackQuery.Data), " ")
+chatID, _ := strconv.Atoi(args[1])
+messageID, _ := strconv.Atoi(args[2])
+storageName := args[3]
+logger.L.Tracef("Got add to queue: chatID: %d, messageID: %d, storage: %s", chatID, messageID, storageName)
+record, err := dao.GetReceivedFileByChatAndMessageID(int64(chatID), messageID)
+if err != nil {
+logger.L.Errorf("Failed to get received file: %s", err)
+ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{
+QueryID: update.CallbackQuery.QueryID,
+Alert: true,
+Message: "Query record failed",
+CacheTime: 5,
+})
+return dispatcher.EndGroups
+}
+if update.CallbackQuery.MsgID != record.ReplyMessageID {
+record.ReplyMessageID = update.CallbackQuery.MsgID
+if err := dao.SaveReceivedFile(record); err != nil {
+logger.L.Errorf("Failed to update received file: %s", err)
+}
 }
 
-func FileFromMedia(media tg.MessageMediaClass, customFileName string) (*types.File, error) {
-	switch media := media.(type) {
-	case *tg.MessageMediaDocument:
-		document, ok := media.Document.AsNotEmpty()
-		if !ok {
-			return nil, ErrEmptyDocument
-		}
-		if customFileName != "" {
-			return &types.File{
-				Location: document.AsInputDocumentFileLocation(),
-				FileSize: document.Size,
-				FileName: customFileName,
-			}, nil
-		}
-		fileName := ""
-		for _, attribute := range document.Attributes {
-			if name, ok := attribute.(*tg.DocumentAttributeFilename); ok {
-				fileName = name.GetFileName()
-				break
-			}
-		}
-		return &types.File{
-			Location: document.AsInputDocumentFileLocation(),
-			FileSize: document.Size,
-			FileName: fileName,
-		}, nil
-	case *tg.MessageMediaPhoto:
-		photo, ok := media.Photo.AsNotEmpty()
-		if !ok {
-			return nil, ErrEmptyPhoto
-		}
-		sizes := photo.Sizes
-		if len(sizes) == 0 {
-			return nil, ErrEmptyPhotoSizes
-		}
-		photoSize := sizes[len(sizes)-1]
-		size, ok := photoSize.AsNotEmpty()
-		if !ok {
-			return nil, ErrEmptyPhotoSize
-		}
-		location := new(tg.InputPhotoFileLocation)
-		location.ID = photo.GetID()
-		location.AccessHash = photo.GetAccessHash()
-		location.FileReference = photo.GetFileReference()
-		location.ThumbSize = size.GetType()
-		fileName := customFileName
-		if fileName == "" {
-			fileName = fmt.Sprintf("photo_%s_%d.jpg", time.Now().Format("2006-01-02_15-04-05"), photo.GetID())
-		}
-		return &types.File{
-			Location: location,
-			FileSize: 0,
-			FileName: fileName,
-		}, nil
-
-	}
-	return nil, fmt.Errorf("unexpected type %T", media)
+file, err := FileFromMessage(ctx, record.ChatID, record.MessageID, record.FileName)
+if err != nil {
+logger.L.Errorf("Failed to get file from message: %s", err)
+ctx.AnswerCallback(&tg.MessagesSetBotCallbackAnswerRequest{
+QueryID: update.CallbackQuery.QueryID,
+Alert: true,
+Message: fmt.Sprintf("Failed to get the file in the message: %s", err),
+CacheTime: 5,
+})
+return dispatcher.EndGroups
 }
 
-func FileFromMessage(ctx *ext.Context, chatID int64, messageID int, customFileName string) (*types.File, error) {
-	key := fmt.Sprintf("file:%d:%d", chatID, messageID)
-	logger.L.Debugf("Getting file: %s", key)
-	var cachedFile types.File
-	err := common.Cache.Get(key, &cachedFile)
-	if err == nil {
-		return &cachedFile, nil
-	}
-	message, err := GetTGMessage(ctx, chatID, messageID)
-	if err != nil {
-		return nil, err
-	}
-	file, err := FileFromMedia(message.Media, customFileName)
-	if err != nil {
-		return nil, err
-	}
-	if err := common.Cache.Set(key, file, 3600); err != nil {
-		logger.L.Errorf("Failed to cache file: %s", err)
-	}
-	return file, nil
+queue.AddTask(types.Task{
+Ctx: ctx,
+Status: types.Pending,
+File: file,
+Storage: types.StorageType(storageName),
+FileChatID: record.ChatID,
+ReplyMessageID: record.ReplyMessageID,
+FileMessageID: record.MessageID,
+ReplyChatID: record.ReplyChatID,
+})
+
+entityBuilder := entity.Builder{}
+var entities []tg.MessageEntityClass
+text := fmt.Sprintf("Added to the task queue\nFile name: %s\nCurrent number of queued tasks: %d", record.FileName, queue.Len())
+if err := styling.Perform(&entityBuilder,
+styling.Plain("Added to task queue\nFile name: "),
+styling.Code(record.FileName),
+styling.Plain("\nCurrent number of queued tasks: "),
+styling.Bold(strconv.Itoa(queue.Len())),
+); err != nil {
+logger.L.Errorf("Failed to build entity: %s", err)
+} else {
+text, entities = entityBuilder.Complete()
 }
 
-func GetTGMessage(ctx *ext.Context, chatId int64, messageID int) (*tg.Message, error) {
-	logger.L.Debugf("Fetching message: %d", messageID)
-	messages, err := ctx.GetMessages(chatId, []tg.InputMessageClass{&tg.InputMessageID{ID: messageID}})
-	if err != nil {
-		return nil, err
-	}
-	if len(messages) == 0 {
-		return nil, errors.New("no messages found")
-	}
-	msg := messages[0]
-	tgMessage, ok := msg.(*tg.Message)
-	if !ok {
-		return nil, fmt.Errorf("unexpected message type: %T", msg)
-	}
-	return tgMessage, nil
-}
-
-func ProvideSelectMessage(ctx *ext.Context, update *ext.Update, file *types.File, chatID int, fileMsgID, toEditMsgID int) error {
-	entityBuilder := entity.Builder{}
-	var entities []tg.MessageEntityClass
-	text := fmt.Sprintf("文件名: %s\n请选择存储位置", file.FileName)
-	if err := styling.Perform(&entityBuilder,
-		styling.Plain("文件名: "),
-		styling.Code(file.FileName),
-		styling.Plain("\n请选择存储位置"),
-	); err != nil {
-		logger.L.Errorf("Failed to build entity: %s", err)
-	} else {
-		text, entities = entityBuilder.Complete()
-	}
-	_, err := ctx.EditMessage(update.EffectiveChat().GetID(), &tg.MessagesEditMessageRequest{
-		Message:     text,
-		Entities:    entities,
-		ReplyMarkup: getAddTaskMarkup(chatID, fileMsgID),
-		ID:          toEditMsgID,
-	})
-	if err != nil {
-		logger.L.Errorf("Failed to reply: %s", err)
-	}
-	return dispatcher.EndGroups
-}
-
-func HandleSilentAddTask(ctx *ext.Context, update *ext.Update, user *types.User, task *types.Task) error {
-	if user.DefaultStorage == "" {
-		ctx.EditMessage(update.EffectiveChat().GetID(), &tg.MessagesEditMessageRequest{
-			Message: "请先使用 /storage 设置默认存储位置",
-			ID:      task.ReplyMessageID,
-		})
-		return dispatcher.EndGroups
-	}
-	queue.AddTask(*task)
-	ctx.EditMessage(update.EffectiveChat().GetID(), &tg.MessagesEditMessageRequest{
-		Message: fmt.Sprintf("已添加到队列: %s\n当前排队任务数: %d", task.FileName(), queue.Len()),
-		ID:      task.ReplyMessageID,
-	})
-	return dispatcher.EndGroups
+ctx.EditMessage(update.EffectiveChat().GetID(), &tg.MessagesEditMessageRequest{
+Message: text,
+Entities: entities,
+ID: record.ReplyMessageID,
+})
+return dispatcher.EndGroups
 }
