@@ -71,11 +71,11 @@ func Init() {
 		_, err = client.API().BotsSetBotCommands(ctx, &tg.BotsSetBotCommandsRequest{
 			Scope: &tg.BotCommandScopeDefault{},
 			Commands: []tg.BotCommand{
-				{Command: "start", Description: "开始使用"},
-				{Command: "help", Description: "显示帮助"},
-				{Command: "silent", Description: "开启/关闭静默模式"},
-				{Command: "storage", Description: "设置默认存储端"},
-				{Command: "save", Description: "保存所回复的文件"},
+				{Command: "start", Description: "Get Started"},
+				{Command: "help", Description: "Show Help"},
+				{Command: "silent", Description: "Turn on/off silent mode"},
+				{Command: "storage", Description: "Set the default storage"},
+				{Command: "save", Description: "Save the replied file"},
 			},
 		})
 		resultChan <- struct {
