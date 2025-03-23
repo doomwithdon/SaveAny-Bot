@@ -3,6 +3,8 @@ package bot
 import (
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/celestix/gotgproto/dispatcher"
@@ -12,7 +14,6 @@ import (
 	"github.com/gotd/td/tg"
 	"github.com/krau/SaveAny-Bot/common"
 	"github.com/krau/SaveAny-Bot/dao"
-	"github.com/krau/SaveAny-Bot/logger"
 	"github.com/krau/SaveAny-Bot/queue"
 	"github.com/krau/SaveAny-Bot/storage"
 	"github.com/krau/SaveAny-Bot/types"
@@ -178,7 +179,7 @@ func FileFromMedia(media tg.MessageMediaClass, customFileName string) (*types.Fi
 
 func FileFromMessage(ctx *ext.Context, chatID int64, messageID int, customFileName string) (*types.File, error) {
 	key := fmt.Sprintf("file:%d:%d", chatID, messageID)
-	logger.L.Debugf("Getting file: %s", key)
+	common.Log.Debugf("Getting file: %s", key)
 	var cachedFile types.File
 	err := common.Cache.Get(key, &cachedFile)
 	if err == nil {
@@ -193,13 +194,13 @@ func FileFromMessage(ctx *ext.Context, chatID int64, messageID int, customFileNa
 		return nil, err
 	}
 	if err := common.Cache.Set(key, file, 3600); err != nil {
-		logger.L.Errorf("Failed to cache file: %s", err)
+		common.Log.Errorf("Failed to cache file: %s", err)
 	}
 	return file, nil
 }
 
 func GetTGMessage(ctx *ext.Context, chatId int64, messageID int) (*tg.Message, error) {
-	logger.L.Debugf("Fetching message: %d", messageID)
+	common.Log.Debugf("Fetching message: %d", messageID)
 	messages, err := ctx.GetMessages(chatId, []tg.InputMessageClass{&tg.InputMessageID{ID: messageID}})
 	if err != nil {
 		return nil, err
@@ -215,29 +216,29 @@ func GetTGMessage(ctx *ext.Context, chatId int64, messageID int) (*tg.Message, e
 	return tgMessage, nil
 }
 
-func ProvideSelectMessage(ctx *ext.Context, update *ext.Update, file *types.File, chatID int64, fileMsgID, toEditMsgID int) error {
+func ProvideSelectMessage(ctx *ext.Context, update *ext.Update, fileName string, chatID int64, fileMsgID, toEditMsgID int) error {
 	entityBuilder := entity.Builder{}
 	var entities []tg.MessageEntityClass
-	text := fmt.Sprintf("文件名: %s\n请选择存储位置", file.FileName)
+	text := fmt.Sprintf("文件名: %s\n请选择存储位置", fileName)
 	if err := styling.Perform(&entityBuilder,
 		styling.Plain("文件名: "),
-		styling.Code(file.FileName),
+		styling.Code(fileName),
 		styling.Plain("\n请选择存储位置"),
 	); err != nil {
-		logger.L.Errorf("Failed to build entity: %s", err)
+		common.Log.Errorf("Failed to build entity: %s", err)
 	} else {
 		text, entities = entityBuilder.Complete()
 	}
 	markup, err := getSelectStorageMarkup(update.GetUserChat().GetID(), int(chatID), fileMsgID)
 	if errors.Is(err, ErrNoStorages) {
-		logger.L.Errorf("Failed to get select storage markup: %s", err)
+		common.Log.Errorf("Failed to get select storage markup: %s", err)
 		ctx.EditMessage(update.EffectiveChat().GetID(), &tg.MessagesEditMessageRequest{
 			Message: "无可用存储",
 			ID:      toEditMsgID,
 		})
 		return dispatcher.EndGroups
 	} else if err != nil {
-		logger.L.Errorf("Failed to get select storage markup: %s", err)
+		common.Log.Errorf("Failed to get select storage markup: %s", err)
 		ctx.EditMessage(update.EffectiveChat().GetID(), &tg.MessagesEditMessageRequest{
 			Message: "无法获取存储",
 			ID:      toEditMsgID,
@@ -251,7 +252,7 @@ func ProvideSelectMessage(ctx *ext.Context, update *ext.Update, file *types.File
 		ID:          toEditMsgID,
 	})
 	if err != nil {
-		logger.L.Errorf("Failed to reply: %s", err)
+		common.Log.Errorf("Failed to reply: %s", err)
 	}
 	return dispatcher.EndGroups
 }
@@ -270,4 +271,20 @@ func HandleSilentAddTask(ctx *ext.Context, update *ext.Update, user *dao.User, t
 		ID:      task.ReplyMessageID,
 	})
 	return dispatcher.EndGroups
+}
+
+func GenFileNameFromMessage(message tg.Message, file *types.File) string {
+	if file.FileName != "" {
+		return file.FileName
+	}
+	text := strings.TrimSpace(message.GetMessage())
+	if text == "" {
+		return file.Hash()
+	}
+	tags := common.ExtractTagsFromText(text)
+	if len(tags) > 0 {
+		return fmt.Sprintf("%s_%s", strings.Join(tags, "_"), strconv.Itoa(message.GetID()))
+	}
+	runes := []rune(text)
+	return string(runes[:min(128, len(runes))])
 }
