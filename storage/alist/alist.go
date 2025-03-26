@@ -106,6 +106,12 @@ func (a *Alist) Save(ctx context.Context, reader io.Reader, storagePath string) 
 	req.Header.Set("Authorization", a.token)
 	req.Header.Set("File-Path", url.PathEscape(storagePath))
 	req.Header.Set("Content-Type", "application/octet-stream")
+	if length := ctx.Value(types.ContextKeyContentLength); length != nil {
+		length, ok := length.(int64)
+		if ok {
+			req.ContentLength = length
+		}
+	}
 
 	resp, err := a.client.Do(req)
 	if err != nil {
@@ -132,6 +138,10 @@ func (a *Alist) Save(ctx context.Context, reader io.Reader, storagePath string) 
 	}
 
 	return nil
+}
+
+func (a *Alist) NotSupportStream() string {
+	return "Alist does not support chunked transfer encoding"
 }
 
 func (a *Alist) JoinStoragePath(task types.Task) string {
