@@ -1,7 +1,7 @@
+name: Update Contributors
+
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 jobs:
   contrib-readme-job:
