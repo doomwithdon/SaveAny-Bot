@@ -1,21 +1,25 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/krau/SaveAny-Bot/config/storage"
+	"github.com/krau/SaveAny-Bot/i18n"
+	"github.com/krau/SaveAny-Bot/i18n/i18nk"
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Workers      int  `toml:"workers" mapstructure:"workers"`
-	Retry        int  `toml:"retry" mapstructure:"retry"`
-	NoCleanCache bool `toml:"no_clean_cache" mapstructure:"no_clean_cache" json:"no_clean_cache"`
-	Threads      int  `toml:"threads" mapstructure:"threads" json:"threads"`
-	Stream       bool `toml:"stream" mapstructure:"stream" json:"stream"`
+	Lang         string `toml:"lang" mapstructure:"lang" json:"lang"`
+	Workers      int    `toml:"workers" mapstructure:"workers"`
+	Retry        int    `toml:"retry" mapstructure:"retry"`
+	NoCleanCache bool   `toml:"no_clean_cache" mapstructure:"no_clean_cache" json:"no_clean_cache"`
+	Threads      int    `toml:"threads" mapstructure:"threads" json:"threads"`
+	Stream       bool   `toml:"stream" mapstructure:"stream" json:"stream"`
 
 	// Experimental: 将拷贝媒体文件的功能设为公开可用
 	AsPublicCopyMediaBot bool `toml:"as_public_copy_media_bot" mapstructure:"as_public_copy_media_bot" json:"as_public_copy_media_bot"`
@@ -47,13 +51,19 @@ type dbConfig struct {
 }
 
 type telegramConfig struct {
-	Token      string      `toml:"token" mapstructure:"token"`
-	AppID      int         `toml:"app_id" mapstructure:"app_id" json:"app_id"`
-	AppHash    string      `toml:"app_hash" mapstructure:"app_hash" json:"app_hash"`
-	Timeout    int         `toml:"timeout" mapstructure:"timeout" json:"timeout"`
-	Proxy      proxyConfig `toml:"proxy" mapstructure:"proxy"`
-	FloodRetry int         `toml:"flood_retry" mapstructure:"flood_retry" json:"flood_retry"`
-	RpcRetry   int         `toml:"rpc_retry" mapstructure:"rpc_retry" json:"rpc_retry"`
+	Token      string        `toml:"token" mapstructure:"token"`
+	AppID      int           `toml:"app_id" mapstructure:"app_id" json:"app_id"`
+	AppHash    string        `toml:"app_hash" mapstructure:"app_hash" json:"app_hash"`
+	Timeout    int           `toml:"timeout" mapstructure:"timeout" json:"timeout"`
+	Proxy      proxyConfig   `toml:"proxy" mapstructure:"proxy"`
+	FloodRetry int           `toml:"flood_retry" mapstructure:"flood_retry" json:"flood_retry"`
+	RpcRetry   int           `toml:"rpc_retry" mapstructure:"rpc_retry" json:"rpc_retry"`
+	Userbot    userbotConfig `toml:"userbot" mapstructure:"userbot" json:"userbot"`
+}
+
+type userbotConfig struct {
+	Enable  bool   `toml:"enable" mapstructure:"enable"`
+	Session string `toml:"session" mapstructure:"session"`
 }
 
 type proxyConfig struct {
@@ -82,6 +92,8 @@ func Init() error {
 	replacer := strings.NewReplacer(".", "_")
 	viper.SetEnvKeyReplacer(replacer)
 
+	viper.SetDefault("lang", "zh-Hans")
+
 	viper.SetDefault("workers", 3)
 	viper.SetDefault("retry", 3)
 	viper.SetDefault("threads", 4)
@@ -91,6 +103,8 @@ func Init() error {
 	viper.SetDefault("telegram.timeout", 60)
 	viper.SetDefault("telegram.flood_retry", 5)
 	viper.SetDefault("telegram.rpc_retry", 5)
+	viper.SetDefault("telegram.userbot.enable", false)
+	viper.SetDefault("telegram.userbot.session", "data/usersession.db")
 
 	viper.SetDefault("temp.base_path", "cache/")
 	viper.SetDefault("temp.cache_ttl", 30)
@@ -128,18 +142,25 @@ func Init() error {
 	storageNames := make(map[string]struct{})
 	for _, storage := range Cfg.Storages {
 		if _, ok := storageNames[storage.GetName()]; ok {
-			return fmt.Errorf("重复的存储名: %s", storage.GetName())
+			return errors.New(i18n.TWithoutInit(Cfg.Lang, i18nk.ConfigInvalidDuplicateStorageName, map[string]any{
+				"Name": storage.GetName(),
+			}))
 		}
 		storageNames[storage.GetName()] = struct{}{}
 	}
 
-	fmt.Printf("已加载 %d 个存储:\n", len(Cfg.Storages))
+	fmt.Println(i18n.TWithoutInit(Cfg.Lang, i18nk.LoadedStorages, map[string]any{
+		"Count": len(Cfg.Storages),
+	}))
 	for _, storage := range Cfg.Storages {
 		fmt.Printf("  - %s (%s)\n", storage.GetName(), storage.GetType())
 	}
 
 	if Cfg.Workers < 1 || Cfg.Retry < 1 {
-		return fmt.Errorf("workers 和 retry 必须大于 0, 当前值: workers=%d, retry=%d", Cfg.Workers, Cfg.Retry)
+		return errors.New(i18n.TWithoutInit(Cfg.Lang, i18nk.ConfigInvalidWorkersOrRetry, map[string]any{
+			"Workers": Cfg.Workers,
+			"Retry":   Cfg.Retry,
+		}))
 	}
 
 	for _, storage := range Cfg.Storages {
