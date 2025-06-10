@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/gotd/td/telegram/message/entity"
 	"github.com/gotd/td/telegram/message/styling"
+	"github.com/gotd/td/telegram/query"
 	"github.com/gotd/td/tg"
 	"github.com/krau/SaveAny-Bot/common"
 	"github.com/krau/SaveAny-Bot/dao"
@@ -235,6 +237,107 @@ func GetTGMessage(ctx *ext.Context, chatId int64, messageID int) (*tg.Message, e
 	return tgMessage, nil
 }
 
+// Userbot only
+//
+// https://github.com/iyear/tdl/blob/fbb396da774ba544e527c3ef41c44921ad74ee98/core/util/tutil/tutil.go#L174
+func GetSingleHistoryMessage(ctx context.Context, client *tg.Client, peer tg.InputPeerClass, msg int) (*tg.Message, error) {
+	it := query.Messages(client).GetHistory(peer).OffsetID(msg + 1).BatchSize(1).Iter()
+
+	if !it.Next(ctx) {
+		return nil, fmt.Errorf("failed to get message %d from %s: %w", msg, peer, it.Err())
+	}
+
+	m, ok := it.Value().Msg.(*tg.Message)
+	if !ok {
+		return nil, fmt.Errorf("invalid message %d", msg)
+	}
+
+	if m.GetID() != msg {
+		return nil, fmt.Errorf("the message %d/%d may be deleted", GetInputPeerID(peer), msg)
+	}
+	return m, nil
+}
+
+// Userbot only
+func GetHistoryMessages(ctx context.Context, client *tg.Client, peer tg.InputPeerClass, startID, limit int) ([]*tg.Message, error) {
+	endID := startID + limit - 1
+	msgs, err := client.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+		Peer:      peer,
+		OffsetID:  startID,
+		Limit:     limit,
+		AddOffset: startID - endID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get history messages: %w", err)
+	}
+	var msgClass []tg.MessageClass
+	switch msgsv := msgs.(type) {
+	case *tg.MessagesMessages:
+		msgClass = msgsv.GetMessages()
+	case *tg.MessagesMessagesSlice:
+		msgClass = msgsv.GetMessages()
+	case *tg.MessagesChannelMessages:
+		msgClass = msgsv.GetMessages()
+	default:
+		return nil, fmt.Errorf("unexpected messages type: %T", msgs)
+	}
+
+	messageBatch := make([]*tg.Message, 0, 100)
+
+	for _, msg := range msgClass {
+		msgNotEmpty, ok := msg.AsNotEmpty()
+		if !ok {
+			continue
+		}
+		switch msgNotEmptyV := msgNotEmpty.(type) {
+		case *tg.Message:
+			messageBatch = append(messageBatch, msgNotEmptyV)
+		default:
+			common.Log.Warnf("Unexpected message type: %T, skipping", msgNotEmptyV)
+			continue
+		}
+	}
+	if len(messageBatch) == 0 {
+		return nil, fmt.Errorf("no messages found for peer %s with startID %d and limit %d", peer, startID, limit)
+	}
+	return messageBatch, nil
+}
+
+func GetMediaGroup(ctx *ext.Context, chatID int64, messageID int, groupID int64) ([]*tg.Message, error) {
+	peer := ctx.PeerStorage.GetInputPeerById(chatID)
+	if peer == nil {
+		return nil, fmt.Errorf("无法获取聊天 %d 的输入 Peer", chatID)
+	}
+	messages, err := GetHistoryMessages(ctx, ctx.Raw, peer, messageID-9, 20)
+	if err != nil {
+		return nil, fmt.Errorf("获取消息失败: %s", err)
+	}
+	var groupMessages []*tg.Message
+	for _, msg := range messages {
+		gID, isGroup := msg.GetGroupedID()
+		if isGroup && gID == groupID {
+			groupMessages = append(groupMessages, msg)
+		}
+	}
+	if len(groupMessages) == 0 || (len(groupMessages) == 1 && groupMessages[0].ID == messageID) {
+		return nil, fmt.Errorf("未找到媒体组 %d 中的消息", groupID)
+	}
+	return groupMessages, nil
+}
+
+func GetInputPeerID(peer tg.InputPeerClass) int64 {
+	switch p := peer.(type) {
+	case *tg.InputPeerUser:
+		return p.UserID
+	case *tg.InputPeerChat:
+		return p.ChatID
+	case *tg.InputPeerChannel:
+		return p.ChannelID
+	}
+
+	return 0
+}
+
 func ProvideSelectMessage(ctx *ext.Context, update *ext.Update, fileName string, chatID int64, fileMsgID, toEditMsgID int) error {
 	entityBuilder := entity.Builder{}
 	var entities []tg.MessageEntityClass
@@ -317,6 +420,13 @@ func genFileNameFromMessageText(message tg.Message, file *types.File) string {
 	if len(tags) > 0 {
 		return fmt.Sprintf("%s_%s", strings.Join(tags, "_"), strconv.Itoa(message.GetID()))
 	}
+	// 删除换行和特殊字符
+	text = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' || r == ' ' {
+			return '_'
+		}
+		return r
+	}, text)
 	runes := []rune(text)
 	return string(runes[:min(128, len(runes))])
 }
