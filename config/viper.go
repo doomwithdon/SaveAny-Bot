@@ -15,20 +15,26 @@ import (
 )
 
 type Config struct {
-	Lang         string `toml:"lang" mapstructure:"lang" json:"lang"`
-	Workers      int    `toml:"workers" mapstructure:"workers"`
-	Retry        int    `toml:"retry" mapstructure:"retry"`
-	NoCleanCache bool   `toml:"no_clean_cache" mapstructure:"no_clean_cache" json:"no_clean_cache"`
-	Threads      int    `toml:"threads" mapstructure:"threads" json:"threads"`
-	Stream       bool   `toml:"stream" mapstructure:"stream" json:"stream"`
+	Lang         string      `toml:"lang" mapstructure:"lang" json:"lang"`
+	Workers      int         `toml:"workers" mapstructure:"workers"`
+	Retry        int         `toml:"retry" mapstructure:"retry"`
+	NoCleanCache bool        `toml:"no_clean_cache" mapstructure:"no_clean_cache" json:"no_clean_cache"`
+	Threads      int         `toml:"threads" mapstructure:"threads" json:"threads"`
+	Stream       bool        `toml:"stream" mapstructure:"stream" json:"stream"`
+	Cache        cacheConfig `toml:"cache" mapstructure:"cache" json:"cache"`
 
 	Users []userConfig `toml:"users" mapstructure:"users" json:"users"`
 
 	Temp     tempConfig              `toml:"temp" mapstructure:"temp"`
-	Log      logConfig               `toml:"log" mapstructure:"log"`
 	DB       dbConfig                `toml:"db" mapstructure:"db"`
 	Telegram telegramConfig          `toml:"telegram" mapstructure:"telegram"`
 	Storages []storage.StorageConfig `toml:"-" mapstructure:"-" json:"storages"`
+}
+
+type cacheConfig struct {
+	TTL         int64 `toml:"ttl" mapstructure:"ttl" json:"ttl"`
+	NumCounters int64 `toml:"num_counters" mapstructure:"num_counters" json:"num_counters"`
+	MaxCost     int64 `toml:"max_cost" mapstructure:"max_cost" json:"max_cost"`
 }
 
 type tempConfig struct {
@@ -36,26 +42,19 @@ type tempConfig struct {
 	CacheTTL int64  `toml:"cache_ttl" mapstructure:"cache_ttl" json:"cache_ttl"`
 }
 
-type logConfig struct {
-	Level       string `toml:"level" mapstructure:"level"`
-	File        string `toml:"file" mapstructure:"file"`
-	BackupCount uint   `toml:"backup_count" mapstructure:"backup_count" json:"backup_count"`
-}
-
 type dbConfig struct {
 	Path    string `toml:"path" mapstructure:"path"`
 	Session string `toml:"session" mapstructure:"session"`
-	Expire  int64  `toml:"expire" mapstructure:"expire"`
 }
 
 type telegramConfig struct {
-	Token      string        `toml:"token" mapstructure:"token"`
-	AppID      int           `toml:"app_id" mapstructure:"app_id" json:"app_id"`
-	AppHash    string        `toml:"app_hash" mapstructure:"app_hash" json:"app_hash"`
-	Timeout    int           `toml:"timeout" mapstructure:"timeout" json:"timeout"`
-	Proxy      proxyConfig   `toml:"proxy" mapstructure:"proxy"`
-	RpcRetry   int           `toml:"rpc_retry" mapstructure:"rpc_retry" json:"rpc_retry"`
-	Userbot    userbotConfig `toml:"userbot" mapstructure:"userbot" json:"userbot"`
+	Token    string        `toml:"token" mapstructure:"token"`
+	AppID    int           `toml:"app_id" mapstructure:"app_id" json:"app_id"`
+	AppHash  string        `toml:"app_hash" mapstructure:"app_hash" json:"app_hash"`
+	Timeout  int           `toml:"timeout" mapstructure:"timeout" json:"timeout"`
+	Proxy    proxyConfig   `toml:"proxy" mapstructure:"proxy"`
+	RpcRetry int           `toml:"rpc_retry" mapstructure:"rpc_retry" json:"rpc_retry"`
+	Userbot  userbotConfig `toml:"userbot" mapstructure:"userbot" json:"userbot"`
 }
 
 type userbotConfig struct {
@@ -95,6 +94,10 @@ func Init(ctx context.Context) error {
 	viper.SetDefault("retry", 3)
 	viper.SetDefault("threads", 4)
 
+	viper.SetDefault("cache.ttl", 86400)
+	viper.SetDefault("cache.num_counters", 1e5)
+	viper.SetDefault("cache.max_cost", 1e6)
+
 	viper.SetDefault("telegram.app_id", 1025907)
 	viper.SetDefault("telegram.app_hash", "452b0359b988148995f22ff0f4229750")
 	viper.SetDefault("telegram.timeout", 60)
@@ -104,13 +107,9 @@ func Init(ctx context.Context) error {
 	viper.SetDefault("telegram.userbot.session", "data/usersession.db")
 
 	viper.SetDefault("temp.base_path", "cache/")
-	viper.SetDefault("temp.cache_ttl", 30)
-
-	viper.SetDefault("log.level", "INFO")
 
 	viper.SetDefault("db.path", "data/saveany.db")
 	viper.SetDefault("db.session", "data/session.db")
-	viper.SetDefault("db.expire", 86400*5)
 
 	if err := viper.SafeWriteConfigAs("config.toml"); err != nil {
 		if _, ok := err.(viper.ConfigFileAlreadyExistsError); !ok {
