@@ -12,10 +12,7 @@ import (
 func checkPermission(ctx *ext.Context, update *ext.Update) error {
 	userID := update.GetUserChat().GetID()
 	if !slice.Contain(config.C().GetUsersID(), userID) {
-		const noPermissionText string = `
-您不在白名单中, 无法使用此 Bot.
-您可以部署自己的实例: https://github.com/krau/SaveAny-Bot
-`
+		const noPermissionText string = ``
 		ctx.Reply(update, ext.ReplyTextString(noPermissionText), nil)
 		return dispatcher.EndGroups
 	}
