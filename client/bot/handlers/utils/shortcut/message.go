@@ -196,6 +196,7 @@ func GetTphPicsFromMessageWithReply(ctx *ext.Context, update *ext.Update) (*type
 		logger.Errorf("Failed to reply to update: %s", err)
 		return nil, nil, dispatcher.EndGroups
 	}
+	logger.Debugf("Fetching telegraph page: %s", pagepath)
 	page, err := tphutil.DefaultClient().GetPage(ctx, pagepath)
 	if err != nil {
 		logger.Errorf("Failed to get telegraph page: %s", err)
@@ -223,6 +224,10 @@ func GetTphPicsFromMessageWithReply(ctx *ext.Context, update *ext.Update) (*type
 		}
 		if node.Tag == "img" {
 			if src, ok := node.Attrs["src"]; ok {
+				if strings.HasPrefix(src, "/file/") {
+					// handle images on telegra.ph server
+					src = "https://telegra.ph" + src
+				}
 				imgs = append(imgs, src)
 			}
 		}

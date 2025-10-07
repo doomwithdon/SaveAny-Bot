@@ -2,28 +2,38 @@ package tphutil
 
 import (
 	"encoding/json"
+	"strings"
+	"sync"
 
 	"github.com/krau/SaveAny-Bot/config"
 	"github.com/krau/SaveAny-Bot/pkg/telegraph"
 )
 
-var tphClient *telegraph.Client
+var (
+	tphClient *telegraph.Client
+	once      sync.Once
+)
 
 func DefaultClient() *telegraph.Client {
-	if tphClient != nil {
-		return tphClient
-	}
+	once.Do(func() {
+		tphClient = initDefault()
+	})
+	return tphClient
+}
+
+func initDefault() *telegraph.Client {
+	var client *telegraph.Client
 	if config.C().Telegram.Proxy.Enable && config.C().Telegram.Proxy.URL != "" {
 		proxyUrl := config.C().Telegram.Proxy.URL
 		var err error
-		tphClient, err = telegraph.NewClientWithProxy(proxyUrl)
+		client, err = telegraph.NewClientWithProxy(proxyUrl)
 		if err != nil {
-			tphClient = telegraph.NewClient()
+			client = telegraph.NewClient()
 		}
 	} else {
-		tphClient = telegraph.NewClient()
+		client = telegraph.NewClient()
 	}
-	return tphClient
+	return client
 }
 
 func GetNodeImages(node telegraph.Node) []string {
@@ -41,6 +51,10 @@ func GetNodeImages(node telegraph.Node) []string {
 
 	if nodeElement.Tag == "img" {
 		if src, exists := nodeElement.Attrs["src"]; exists {
+			if strings.HasPrefix(src, "/file/") {
+				// handle images on telegra.ph server
+				src = "https://telegra.ph" + src
+			}
 			srcs = append(srcs, src)
 		}
 	}
