@@ -68,8 +68,8 @@ func (t *Telegram) Save(ctx context.Context, r io.Reader, storagePath string) er
 	if err := t.limiter.Wait(ctx); err != nil {
 		return fmt.Errorf("rate limit failed: %w", err)
 	}
-	rs, ok := r.(io.ReadSeeker)
-	if !ok || rs == nil {
+	rs, seekable := r.(io.ReadSeeker)
+	if !seekable || rs == nil {
 		return fmt.Errorf("reader must implement io.ReadSeeker")
 	}
 	tctx := tgutil.ExtFromContext(ctx)
@@ -147,6 +147,17 @@ func (t *Telegram) Save(ctx context.Context, r io.Reader, storagePath string) er
 	switch mtypeStr := mtype.String(); {
 	case strings.HasPrefix(mtypeStr, "video/"):
 		media = docb.Video().SupportsStreaming()
+		rs.Seek(0, io.SeekStart)
+		switch mtypeStr {
+		case "video/mp4":
+			info, err := getMP4Info(rs)
+			if err == nil {
+				media = docb.Video().
+					Duration(time.Duration(info.Duration)*time.Second).
+					Resolution(info.Width, info.Height).
+					SupportsStreaming()
+			}
+		}
 	case strings.HasPrefix(mtypeStr, "audio/"):
 		media = docb.Audio().Title(filename)
 	case strings.HasPrefix(mtypeStr, "image/") && !strings.HasSuffix(mtypeStr, "webp"):
