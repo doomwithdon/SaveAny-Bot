@@ -19,7 +19,6 @@ type pooledClient struct {
 	telegram    *telegram.Client
 	connections int
 	close       telegram.CloseInvoker
-	dcMu        sync.Mutex
 	dcPools     map[int]telegram.CloseInvoker
 	dcClients   map[int]downloader.Client
 }
