@@ -13,6 +13,7 @@ import (
 	"github.com/krau/SaveAny-Bot/client/bot/handlers"
 	"github.com/krau/SaveAny-Bot/client/middleware"
 	"github.com/krau/SaveAny-Bot/common/i18n"
+	"github.com/krau/SaveAny-Bot/common/tdler"
 	"github.com/krau/SaveAny-Bot/common/utils/tgutil"
 	"github.com/krau/SaveAny-Bot/config"
 	"github.com/krau/SaveAny-Bot/database"
@@ -92,6 +93,11 @@ func Init(ctx context.Context) <-chan struct{} {
 			log.FromContext(ctx).Fatalf("Failed to initialize Bot: %s", result.err)
 		}
 		ectx = result.client.CreateContext()
+		if err := tdler.RegisterClientPool(result.client.API(), result.client.Client, config.C().Threads); err != nil {
+			log.FromContext(ctx).Warnf("Failed to initialize multi-connection download pool; using primary connection: %s", err)
+		} else {
+			log.FromContext(ctx).Infof("Multi-connection download pool initialized with up to %d connections", max(1, config.C().Threads))
+		}
 		handlers.Register(result.client.Dispatcher, ectx)
 		log.FromContext(ctx).Info("Bot initialization completed.")
 	}
