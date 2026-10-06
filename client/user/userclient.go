@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/log"
 	"github.com/gotd/td/tg"
 	"github.com/krau/SaveAny-Bot/client/middleware"
+	"github.com/krau/SaveAny-Bot/common/tdler"
 	"github.com/krau/SaveAny-Bot/common/utils/tgutil"
 	"github.com/krau/SaveAny-Bot/config"
 	"github.com/krau/SaveAny-Bot/database"
@@ -108,6 +109,11 @@ func Login(ctx context.Context) (*gotgproto.Client, error) {
 			return dispatcher.ContinueGroups
 		}))
 		uc.Dispatcher.AddHandler(handlers.NewMessage(filters.Message.Media, handleMediaMessage))
+		if err := tdler.RegisterClientPool(uc.API(), uc.Client, config.C().Threads); err != nil {
+			log.FromContext(ctx).Warnf("Failed to initialize user multi-connection download pool; using primary connection: %s", err)
+		} else {
+			log.FromContext(ctx).Infof("User multi-connection download pool initialized with up to %d connections", max(1, config.C().Threads))
+		}
 		log.FromContext(ctx).Infof("User client logged in successfully: %s", uc.Self.FirstName+" "+uc.Self.LastName)
 		return uc, nil
 	}
