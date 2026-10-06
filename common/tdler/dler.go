@@ -68,7 +68,7 @@ func downloadClient(base downloader.Client) downloader.Client {
 		return base
 	}
 	poolMu.RLock()
-	_, ok := clientPools[api]
+	_, ok = clientPools[api]
 	poolMu.RUnlock()
 	if ok {
 		return &migratingPoolClient{base: api}
