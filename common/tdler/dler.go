@@ -3,6 +3,7 @@ package tdler
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/log"
 
@@ -82,6 +83,27 @@ type migratingPoolClient struct {
 	base *tg.Client
 }
 
+var floodMu sync.Mutex
+
+func waitFlood(ctx context.Context, dc int, err error) bool {
+	rpcErr, ok := tgerr.As(err)
+	if !ok || rpcErr.Type != "FLOOD_WAIT" {
+		return false
+	}
+	wait := time.Duration(rpcErr.Argument+1) * time.Second
+	floodMu.Lock()
+	defer floodMu.Unlock()
+	log.FromContext(ctx).Warnf("Telegram downloader: FLOOD_WAIT on DC %d; pausing downloads for %s", dc, wait)
+	t := time.NewTimer(wait)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
 func (c *migratingPoolClient) pool() (pooledClient, bool) {
 	poolMu.RLock()
 	p, ok := clientPools[c.base]
@@ -133,11 +155,18 @@ func (c *migratingPoolClient) UploadGetFile(ctx context.Context, req *tg.UploadG
 	if dcErr != nil {
 		return nil, dcErr
 	}
-	result, err = dcClient.UploadGetFile(ctx, req)
-	if err != nil {
-		log.FromContext(ctx).Errorf("Telegram downloader: DC %d getFile failed offset=%d limit=%d ctxErr=%v: %v", rpcErr.Argument, req.Offset, req.Limit, ctx.Err(), err)
+	dc := rpcErr.Argument
+	for {
+		result, err = dcClient.UploadGetFile(ctx, req)
+		if err == nil {
+			return result, nil
+		}
+		if waitFlood(ctx, dc, err) {
+			continue
+		}
+		log.FromContext(ctx).Errorf("Telegram downloader: DC %d getFile failed offset=%d limit=%d ctxErr=%v: %v", dc, req.Offset, req.Limit, ctx.Err(), err)
+		return result, err
 	}
-	return result, err
 }
 
 func (c *migratingPoolClient) UploadGetFileHashes(ctx context.Context, req *tg.UploadGetFileHashesRequest) ([]tg.FileHash, error) {
