@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 
+	"github.com/charmbracelet/log"
+
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/downloader"
 	"github.com/gotd/td/tg"
@@ -95,12 +97,16 @@ func (c *migratingPoolClient) clientForDC(ctx context.Context, dc int) (download
 		return c.base, nil
 	}
 	if dcClient, ok := p.dcClients[dc]; ok {
+		log.FromContext(ctx).Debugf("Telegram downloader: reusing DC %d pool", dc)
 		return dcClient, nil
 	}
+	log.FromContext(ctx).Infof("Telegram downloader: creating DC %d pool with up to %d connections", dc, p.connections)
 	invoker, err := p.telegram.DC(ctx, dc, int64(p.connections))
 	if err != nil {
+		log.FromContext(ctx).Errorf("Telegram downloader: failed creating DC %d pool: %v", dc, err)
 		return nil, err
 	}
+	log.FromContext(ctx).Infof("Telegram downloader: DC %d pool created", dc)
 	dcClient := tg.NewClient(invoker)
 	p.dcPools[dc] = invoker
 	p.dcClients[dc] = dcClient
@@ -119,13 +125,19 @@ func (c *migratingPoolClient) UploadGetFile(ctx context.Context, req *tg.UploadG
 	}
 	rpcErr, ok := tgerr.As(err)
 	if !ok || rpcErr.Type != "FILE_MIGRATE" {
+		log.FromContext(ctx).Errorf("Telegram downloader: primary pool getFile failed offset=%d limit=%d: %v", req.Offset, req.Limit, err)
 		return nil, err
 	}
+	log.FromContext(ctx).Infof("Telegram downloader: FILE_MIGRATE to DC %d at offset=%d limit=%d", rpcErr.Argument, req.Offset, req.Limit)
 	dcClient, dcErr := c.clientForDC(ctx, rpcErr.Argument)
 	if dcErr != nil {
 		return nil, dcErr
 	}
-	return dcClient.UploadGetFile(ctx, req)
+	result, err = dcClient.UploadGetFile(ctx, req)
+	if err != nil {
+		log.FromContext(ctx).Errorf("Telegram downloader: DC %d getFile failed offset=%d limit=%d ctxErr=%v: %v", rpcErr.Argument, req.Offset, req.Limit, ctx.Err(), err)
+	}
+	return result, err
 }
 
 func (c *migratingPoolClient) UploadGetFileHashes(ctx context.Context, req *tg.UploadGetFileHashesRequest) ([]tg.FileHash, error) {
